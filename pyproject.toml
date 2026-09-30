@@ -1,0 +1,55 @@
+[project]
+name = "codetest-sum-agent"
+version = "0.1.0"
+description = "Code Test AI Agent — MCP(코드 기반 처리) + Agent(LLM 판단) 통합 서버"
+requires-python = ">=3.10"
+
+dependencies = [
+    # --- MCP 서버 (CLI 가 MCP 클라이언트로 호출) ---
+    "fastmcp>=3.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+
+    # --- Agent (LLM 판단 전담 FastAPI) ---
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "openai>=1.60",
+
+    # --- MCP ↔ Agent FastAPI 호출 ---
+    "httpx>=0.27",
+
+    # --- 프로젝트 개요 DB (Project, Graph Node/Edge) ---
+    "SQLAlchemy>=2.0",
+
+    # --- 저장소 clone (스냅샷 없이 등록된 예전 프로젝트 전용 하위 호환 경로) ---
+    "GitPython>=3.1",
+
+    # --- AST 파싱 (LLM 토큰 미소모) ---
+    "tree-sitter>=0.22",
+    "tree-sitter-language-pack>=0.2",
+    "lxml>=5.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+#: 통합 — MCP 와 Agent 를 한 프로세스로
+codetest-sum = "codetest_sum.server:serve"
+#: 분리 운영용 (예전 방식 그대로)
+codetest-mcp = "codetest_mcp.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["codetest_sum*", "codetest_mcp*", "codetest_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
