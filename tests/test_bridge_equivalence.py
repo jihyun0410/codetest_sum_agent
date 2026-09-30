@@ -173,16 +173,3 @@ def test_llm_refusal_is_422_both_ways(client, monkeypatch):
     with pytest.raises(AgentError) as exc:
         AgentBridge().generate("p1", ANALYSIS, SOURCES)
     assert exc.value.status_code == 422
-
-
-# --- MCP 가 실제로 내부 경로를 타는가 --------------------------------------------
-def test_build_app_switches_the_mcp_to_the_in_process_path():
-    from codetest_mcp.agent_client import agent_client
-    from codetest_sum.server import build_app
-
-    was_local = agent_client.is_local
-    try:
-        build_app()
-        assert agent_client.is_local, "결합 서버는 MCP 를 내부 호출로 바꿔야 한다"
-    finally:
-        agent_client.use_local(None if not was_local else agent_client._local)

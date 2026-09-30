@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from codetest_mcp import db as db_module
 from codetest_mcp.config import settings
 from codetest_mcp.db import Base
-from codetest_mcp import main as tools
+from src import main as tools
 
 
 @pytest.fixture

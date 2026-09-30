@@ -6,7 +6,6 @@ requires-python = ">=3.10"
 
 dependencies = [
     # --- MCP 서버 (CLI 가 MCP 클라이언트로 호출) ---
-    "fastmcp>=3.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
 
@@ -36,12 +35,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.5",
 ]
-
-[project.scripts]
-#: 통합 — MCP 와 Agent 를 한 프로세스로
-codetest-sum = "codetest_sum.server:serve"
-#: 분리 운영용 (예전 방식 그대로)
-codetest-mcp = "codetest_mcp.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -1,5 +1,4 @@
 # MCP (코드 기반 처리)
-fastmcp>=3.0
 pydantic>=2.7
 pydantic-settings>=2.3
 SQLAlchemy>=2.0
