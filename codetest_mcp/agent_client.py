@@ -14,12 +14,21 @@ MCP 가 진입점이다. CLI 명령을 받아 코드 기반 사실을 확정한 
 
 **기능 중요도는 보내지 않는다** — 코드 그래프로 확정하는 값이라 MCP 가 정한다
 (`importance.py`).
+
+호출 경로는 두 가지다. **어느 쪽이든 주고받는 값은 같다.**
+
+  분리 배포  MCP 와 Agent 가 다른 프로세스 → FastAPI(HTTP) 로 송·수신 (기본)
+  통합 배포  한 프로세스 → `use_local()` 로 끼운 구현을 직접 호출 (HTTP 없음)
+
+`use_local` 은 이 모듈이 Agent 를 import 하지 않게 하려고 둔 자리다. 끼우는 쪽
+(`codetest_sum`)이 Agent 를 알고, MCP 는 "generate/report/health 를 가진 무언가"
+만 안다.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
@@ -42,8 +51,27 @@ class AgentError(RuntimeError):
         self.status_code = status_code
 
 
+class LocalAgent(Protocol):
+    """같은 프로세스에서 Agent 를 직접 부를 때 필요한 것 — HTTP 와 같은 세 가지."""
+
+    def health(self) -> dict: ...
+
+    def generate(
+        self, project_id: str, analysis: dict, sources: list[dict], project_name: str = ""
+    ) -> dict: ...
+
+    def report(
+        self,
+        project_id: str,
+        execution: dict,
+        test_code: str,
+        intent: str = "",
+        intent_rationale: str = "",
+    ) -> dict: ...
+
+
 class AgentClient:
-    """Agent FastAPI 서비스 호출기."""
+    """Agent 호출기. 기본은 FastAPI, `use_local` 을 쓰면 프로세스 내부 호출."""
 
     def __init__(
         self,
@@ -51,6 +79,7 @@ class AgentClient:
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> None:
+        self._local: LocalAgent | None = None
         raw = (base_url or settings.agent_base_url).rstrip("/")
         self.base_url = f"{raw}/api/v1"
         self.api_key = api_key if api_key is not None else settings.agent_api_key
@@ -124,8 +153,25 @@ class AgentClient:
         except httpx.TransportError as exc:
             raise AgentError(_disconnected(exc, self.base_url)) from None
 
+    # --- 호출 경로 -----------------------------------------------------
+    def use_local(self, backend: LocalAgent | None) -> None:
+        """Agent 를 HTTP 없이 같은 프로세스에서 부르게 한다.
+
+        `None` 을 주면 FastAPI 경로로 되돌아간다. 이 싱글턴의 **동일성을 유지**하는
+        것이 중요하다 — `orchestrator`·`main` 이 import 시점에 이 객체를 붙잡아 두므로,
+        객체를 갈아 끼우는 대신 안을 바꿔야 그쪽 코드를 건드리지 않는다.
+        """
+        self._local = backend
+        logger.info("Agent 호출 경로 = %s", "프로세스 내부" if backend else self.base_url)
+
+    @property
+    def is_local(self) -> bool:
+        return self._local is not None
+
     # --- 헬스 ----------------------------------------------------------
     def health(self) -> dict:
+        if self._local is not None:
+            return self._local.health()
         return self._request("GET", "/health", timeout=10.0)
 
     # --- 생성 (정의서 (2)(3), [상세] 2·3) --------------------------------
@@ -137,6 +183,8 @@ class AgentClient:
         project_name: str = "",
     ) -> dict:
         """MCP 가 확정한 변경 사실을 넘겨 Test Code 와 의도 판단을 받는다."""
+        if self._local is not None:
+            return self._local.generate(project_id, analysis, sources, project_name)
         return self._llm_request(
             "/tests/generate",
             {
@@ -157,6 +205,8 @@ class AgentClient:
         intent_rationale: str = "",
     ) -> dict:
         """MCP 가 실행한 결과를 넘겨 적절성 판단을 받는다."""
+        if self._local is not None:
+            return self._local.report(project_id, execution, test_code, intent, intent_rationale)
         return self._llm_request(
             "/tests/execute",
             {

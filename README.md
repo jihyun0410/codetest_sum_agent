@@ -10,8 +10,9 @@ IntelliJ Terminal
    ▼
 codetest CLI  ──HTTP/SSE──▶  /mcp          MCP   코드 기반 처리
 (codereview_gitver)                │
-                                   └─HTTP──▶  /api/v1/tests/…   Agent  LLM 판단
-                                             같은 프로세스 · 같은 포트
+                                   └─함수 호출──▶ testgen.generate / report
+                                                  Agent  LLM 판단
+                                                  같은 프로세스 · HTTP 없음
 ```
 
 **CLI 는 아무것도 바뀌지 않습니다.** 명령도, `CODETEST_SERVER_URL` 이 가리키는
@@ -20,16 +21,17 @@ codetest CLI  ──HTTP/SSE──▶  /mcp          MCP   코드 기반 처리
 ## 역할 분담
 
 정의서: *"LLM을 사용하여 판단하는 부분은 Agent, 코드 기반으로 단순 처리 및 판단을
-진행하는 부분은 MCP로 구분하여 **Fast API를 통해 송/수신**하는 방식으로 구현"*
+진행하는 부분은 MCP로 구분하여 Fast API를 통해 송/수신하는 방식으로 구현"*
 
-한 프로세스가 되었어도 **그 경계와 FastAPI 송·수신은 유지합니다.** MCP 는 여전히
-`agent_client` 로 Agent 의 FastAPI 를 호출하고, 주소만 자기 자신을 가리킵니다.
+**역할 경계는 그대로 두고, 그 사이의 통신만 걷어냈습니다.** 한 프로세스이므로
+`agent_bridge` 가 `testgen` 을 직접 부릅니다 — HTTP 를 타지 않습니다. 분리 배포에서는
+예전처럼 FastAPI 로 오갑니다 (`agent_client.use_local(None)` 이 기본).
 
 | | 패키지 | 하는 일 |
 |---|---|---|
 | **MCP** | `codetest_mcp/` | Git Diff·AST 변경 단위 식별, 프로젝트 개요 DB, 기능 중요도 판단, `@SpringBootTest` 주입, 결과 집계 |
 | **Agent** | `codetest_agent/` | 변경 의도 파악, 사고의 사슬, Test Code 작성, 실행 결과 적절성 판단 |
-| **결합** | `codetest_sum/` | 두 ASGI 앱을 하나로 묶어 한 포트에 올린다 |
+| **결합** | `codetest_sum/` | 두 앱을 한 포트에 올리고, MCP → Agent 를 내부 호출로 잇는다 |
 
 기능 중요도(High/Mid/Low)는 Agent 에 묻지 않습니다. 코드 그래프로 확정하는 값이라
 MCP 의 몫입니다 (`codetest_mcp/importance.py`).
@@ -54,7 +56,7 @@ export CODETEST_API_KEY="…"        # CODETEST_MCP_API_KEYS 중 하나
 
 ### 따로 띄우기
 
-합쳤다고 분리 운영을 막지는 않습니다. 예전 방식이 그대로 살아 있습니다.
+합쳤다고 분리 운영을 막지는 않습니다. 그때는 예전처럼 FastAPI 로 오갑니다.
 
 ```bash
 uvicorn codetest_agent.main:app --host 0.0.0.0 --port 8000   # Agent 만
@@ -62,8 +64,27 @@ CODETEST_MCP_AGENT_BASE_URL=http://<agent-host>:8000 \
   python -m codetest_mcp                                     # MCP 만
 ```
 
-`CODETEST_MCP_AGENT_BASE_URL` 을 지정하지 않으면 결합 서버가 자기 자신
-(`http://127.0.0.1:<CODETEST_SUM_PORT>`)을 채워 넣습니다.
+## MCP → Agent 를 내부 호출로 잇는 방법
+
+`codetest_mcp/agent_client.py` 의 싱글턴에 `use_local(backend)` 로 구현을 끼웁니다.
+**객체를 갈아 끼우지 않고 안을 바꿉니다** — `orchestrator`·`main` 이 import 시점에
+이 객체를 붙잡아 두므로 그래야 그쪽 코드를 건드리지 않습니다.
+
+`agent_bridge` 는 HTTP 경로가 하던 일을 그대로 합니다. 이게 전부 같아야 "통신 방식만
+다르다" 가 성립합니다.
+
+| HTTP 경로에서 누가 하던 일 | 내부 호출에서 |
+|---|---|
+| FastAPI 라우터의 `analysis`/`execution` 빈 값 검사 (422) | 브리지가 같은 메시지로 검사 |
+| pydantic 모델 → JSON 응답 | `model_dump(mode="json")` — MCP 는 `judged.get(...)` 로 읽는다 |
+| `LLMUnavailableError` → 503, `LLMRefusalError` → 422 | 같은 코드를 `AgentError.status_code` 에 실어 준다 |
+| unhandled 예외 → 500 | 같은 문구로 `AgentError(…, 500)` |
+
+없어지는 것은 통신뿐입니다 — keep-alive ping, 스트림 절단, 연결 실패는 같은
+프로세스에서 일어날 수 없는 실패라 다룰 것이 없습니다.
+
+`tests/test_bridge_equivalence.py` 가 같은 입력을 두 경로에 넣어 **응답이 바이트로
+같은지** 그리고 오류 상태 코드가 같은지 검사합니다.
 
 ## 환경변수
 
@@ -93,7 +114,9 @@ CODETEST_MCP_AGENT_BASE_URL=http://<agent-host>:8000 \
 | 구간 | 무응답 상한 | 어떻게 |
 |---|---|---|
 | CLI → MCP | sse-starlette 가 SSE 에 15초마다 ping | MCP 응답을 받으면 CLI 가 스트림 닫힘을 기다리지 않고 끝낸다 |
-| MCP → Agent | `CODETEST_MCP_AGENT_STREAM_IDLE` (기본 180초) | Agent 가 `CODETEST_LLM_PING_SECONDS` 간격으로 `{"type":"ping"}` 을 흘린다 |
+| MCP → Agent (**분리 배포만**) | `CODETEST_MCP_AGENT_STREAM_IDLE` (기본 180초) | Agent 가 `CODETEST_LLM_PING_SECONDS` 간격으로 `{"type":"ping"}` 을 흘린다 |
+
+통합 배포에서는 MCP → Agent 구간에 네트워크가 없으므로 이 장치가 쓰이지 않습니다.
 
 스트림은 **끝 줄 없이 끝나지 않습니다.** 어떤 실패든 `result`/`error` 한 줄로
 끝맺습니다 — 잘린 스트림은 호출자에게 `RemoteProtocolError: peer closed connection
@@ -102,12 +125,13 @@ without sending complete message body` 만 남기고 원인을 하나도 알려 
 ## 테스트
 
 ```bash
-python -m pytest -q          # 115건
+python -m pytest -q          # 123건
 ```
 
 | 경로 | 무엇을 |
 |---|---|
 | `tests/agent/` | Agent 계약 — LLM 을 스텁으로 두고 프롬프트에 실리는 사실과 응답 키를 검증 |
 | `tests/mcp/` | MCP — 변경 단위 식별, 중요도, `@SpringBootTest` 주입, 커밋 스냅샷, Agent 스트림 |
+| `tests/test_bridge_equivalence.py` | 내부 호출과 FastAPI 경로가 같은 값·같은 상태 코드를 주는지 |
 
 LLM 은 스텁으로 대체하므로 API Key 없이 전부 돌아갑니다.
