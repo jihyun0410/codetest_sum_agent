@@ -7,8 +7,8 @@ MCP(`codetest_mcp.config`)와 Agent(`codetest_agent.config`)의 설정은 **그�
   CODETEST_SUM_HOST / CODETEST_SUM_PORT   결합 서버가 듣는 주소 (기본 0.0.0.0:80)
   CODETEST_SUM_MCP_PATH                   MCP 엔드포인트 경로 (기본 /mcp)
 
-MCP 는 Agent 를 **FastAPI 로** 호출한다 (정의서: "Fast API를 통해 송/수신"). 한
-프로세스가 되었어도 그 경로는 유지하고, 주소만 자기 자신을 가리키게 한다.
+MCP 는 Agent 를 **프로세스 내부에서 직접** 호출한다 (`codetest_sum/agent_bridge.py`).
+HTTP 를 타지 않으므로 Agent 주소 설정이 필요 없다.
 """
 
 from __future__ import annotations
@@ -32,19 +32,3 @@ def port() -> int:
 def mcp_path() -> str:
     path = os.getenv("CODETEST_SUM_MCP_PATH") or DEFAULT_MCP_PATH
     return "/" + path.strip("/")
-
-
-def point_mcp_at_this_process() -> str:
-    """MCP 가 부를 Agent 주소를 이 프로세스로 맞춘다.
-
-    **`codetest_mcp` 를 import 하기 전에** 불러야 한다 — 설정은 import 시점에
-    환경변수에서 읽히고, `agent_client` 싱글턴이 그 값을 그대로 물고 만들어진다.
-    사용자가 `CODETEST_MCP_AGENT_BASE_URL` 을 직접 지정했으면 건드리지 않는다
-    (Agent 를 따로 떼어 띄우는 구성을 막지 않기 위해).
-    """
-    existing = os.getenv("CODETEST_MCP_AGENT_BASE_URL")
-    if existing:
-        return existing
-    url = f"http://127.0.0.1:{port()}"
-    os.environ["CODETEST_MCP_AGENT_BASE_URL"] = url
-    return url
