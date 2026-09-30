@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, contextmanager
 
@@ -261,3 +262,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 @app.get("/", include_in_schema=False)
 def root() -> dict:
     return {"app": settings.app_name, "docs": "/docs", "api": "/api/v1"}
+
+
+# --- MCP 내장 -----------------------------------------------------------------
+# Agent 앱 하나만 띄우는 배포(`uvicorn codetest_agent.main:app`)에서도 CLI 가 붙는
+# `/mcp` 가 열려야 한다. 결합 서버의 `build_app()` 이 이 앱에 MCP 를 마운트하고
+# MCP → Agent 를 프로세스 내부 호출로 잇는다. 마운트는 라우트가 모두 등록된 뒤여야
+# 하므로 반드시 파일 맨 끝에서 한다. 끄려면 CODETEST_EMBED_MCP=0.
+if os.getenv("CODETEST_EMBED_MCP", "1").strip().lower() not in ("0", "false", "no", "off"):
+    from codetest_sum.server import build_app
+
+    build_app()
